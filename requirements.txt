@@ -1,0 +1,25 @@
+# using CUDA pytorch available at https://pytorch.org/get-started/locally/
+dotenv
+requests
+pymongo
+fvcore 
+omegaconf 
+av 
+cloudpickle 
+pycocotools 
+accelerate 
+transformers
+diffusers 
+opencv-python 
+matplotlib
+scipy
+psycopg2
+fastapi
+uvicorn
+uuid
+fastapi
+uvicorn
+cloudinary
+pillow
+google-generativeai
+pyodbc

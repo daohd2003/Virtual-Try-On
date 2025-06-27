@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FashionFit - Virtual Try-On Experience</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="app-title">Try On Fashion<span class="sparkle">Fit</span></h1>
+            <p class="app-subtitle">Experience the future of online shopping with our AI-powered virtual try-on technology. Upload your photo and a garment to see how it looks on you!</p>
+        </header>
+        
+        <div class="upload-section">
+            <div class="upload-box">
+                <h2><i class="fas fa-user-circle"></i> Person Image</h2>
+                <div class="dropzone" id="personDropzone">
+                    <i class="fas fa-cloud-upload-alt cloud-icon"></i>
+                    <div class="upload-text">
+                        <p>Drop Image Here</p>
+                        <p>- or -</p>
+                        <p class="upload-link">Click to Upload</p>
+                    </div>
+                    <input type="file" id="personInput" accept="image/*">
+                </div>
+            </div>
+            
+            <div class="upload-box">
+                <h2><i class="fas fa-tshirt"></i> Garment Image</h2>
+                <div class="dropzone" id="garmentDropzone">
+                    <i class="fas fa-cloud-upload-alt cloud-icon"></i>
+                    <div class="upload-text">
+                        <p>Drop Image Here</p>
+                        <p>- or -</p>
+                        <p class="upload-link">Click to Upload</p>
+                    </div>
+                    <input type="file" id="garmentInput" accept="image/*">
+                </div>
+            </div>
+            
+            <div class="upload-box generate-box">
+                <div class="generate-icon">
+                    <i class="fas fa-magic magic-wand"></i>
+                </div>
+                <p class="generate-text">Upload both images to create your virtual try-on</p>
+                <button class="generate-button" id="generateButton" disabled>
+                    <i class="fas fa-wand-magic-sparkles"></i> Create Magic!
+                </button>
+            </div>
+        </div>
+        
+        <div class="results-section">
+            <div class="results-box">
+                <h2><i class="fas fa-tshirt"></i> Your Fashion Preview</h2>
+                <div class="generated-image-container" id="generatedImageContainer">
+                    <div class="image-placeholder">
+                        <i class="fas fa-camera placeholder-icon"></i>
+                        <p>Your virtual try-on image will appear here</p>
+                    </div>
+                </div>
+                
+                <div class="analysis-box" id="analysisBox">
+                    <div class="analysis-header">
+                        <i class="fas fa-crown"></i>
+                        <span>Style Fairy Analysis</span>
+                    </div>
+                    <div class="analysis-content">
+                        Generate a try-on image to see AI style and fit analysis
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <footer class="footer">
+            &copy; 2025 FashionFit - Virtual Try-On Technology
+        </footer>
+    </div>
+
+    <script src="index.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+/env
+.env
+.vscode
+notice.txt
+/API/TryOnModel/Image
+/API/TryOnModel/Model
+/API/TryOnModel/densepose_
+/API/TryOnModel/try-on.ipynb
+/API/TryOnModel/__pycache__
+/API/Storage/__pycache__
+/API/__pycache__
+/API/Database/__pycache__
+/temp_uploads
+API/temp_uploads
+Destroy-button.py
