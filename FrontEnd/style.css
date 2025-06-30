@@ -143,6 +143,16 @@ body {
     background-color: var(--secondary-color);
 }
 
+/* Khi dropzone có class 'has-image', ẩn văn bản placeholder đi */
+.dropzone.has-image .upload-text {
+  display: none;
+}
+
+/* Tương tự, ẩn luôn cả icon đám mây */
+.dropzone.has-image .cloud-icon {
+  display: none;
+}
+
 .dropzone:hover {
     background-color: #FFECF5;
     border-color: var(--primary-color);

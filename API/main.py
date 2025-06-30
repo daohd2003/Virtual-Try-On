@@ -16,6 +16,7 @@ from TryOnModel.tryOn import infer_single_image
 from Database.database_service import insert_data, update_data, execute_query, delete_data, getConnectionString, create_tables, get_connection
 from Storage.cloudinary_service import upload_image, delete_image, retrive_image_from_url, save_image
 from TryOnModel.evaluate import get_fashion_feedback
+from fastapi.concurrency import run_in_threadpool
 
 # Create the FastAPI app
 app = FastAPI(
@@ -88,192 +89,102 @@ async def root():
     """Health check endpoint"""
     return {"status": "online", "message": "Virtual Try-On API is running"}
 
-@app.post("/api/upload/images")
-async def upload_images(
+# @app.post("/api/try-on/full-process")
+# async def upload_and_process(
+#     background_tasks: BackgroundTasks,
+#     person_image: Optional[UploadFile] = File(None),
+#     clothing_image: Optional[UploadFile] = File(None),
+#     user_id: Optional[int] = Form(None)
+# ):
+#     """
+#     DEBUGGING ENDPOINT: Tạm thời bỏ qua toàn bộ xử lý và trả về kết quả cố định.
+#     """
+#     # Trả về ngay lập tức đối tượng JSON cố định mà bạn muốn
+#     return {
+#         "success": True,
+#         "person_id": 52,
+#         "person_url": "https://res.cloudinary.com/dno97zymk/image/upload/v1751111028/HackAIThon/20250628184342_aab0222dca4d4102a16d10f87db36ae4.png",
+#         "person_public_id": "20250628184342_aab0222dca4d4102a16d10f87db36ae4",
+#         "clothing_id": 52,
+#         "clothing_url": "https://res.cloudinary.com/dno97zymk/image/upload/v1751111030/HackAIThon/20250628184347_4d2912b81a664f8f8cff4081d984231d.jpg",
+#         "clothing_public_id": "20250628184347_4d2912b81a664f8f8cff4081d984231d",
+#         "result_id": 12345,  # Một ID giả để giữ cấu trúc
+#         "result_url": "https://res.cloudinary.com/dno97zymk/image/upload/v1751171931/HackAIThon/20250629111028.png"
+#     }
+
+@app.post("/api/try-on/full-process")
+async def upload_and_process(
     background_tasks: BackgroundTasks,
     person_image: Optional[UploadFile] = File(None),
     clothing_image: Optional[UploadFile] = File(None),
     user_id: Optional[int] = Form(None)
 ):
-    """
-    Upload person and/or clothing images for virtual try-on
-    
-    - **person_image**: Optional image of the person
-    - **clothing_image**: Optional image of the clothing item
-    - **user_id**: Optional user ID to associate with the images
-    
-    At least one image must be provided.
-    """
-    if not person_image and not clothing_image:
-        raise HTTPException(status_code=400, detail="At least one image must be provided")
-    
-    conn = None
-    temp_files = []
-    result = {"success": True}
-    
-    try:
-        # Get database connection
-        conn = get_connection()
-        if not conn:
-            raise HTTPException(status_code=500, detail="Database connection failed")
-        
-        # Validate user_id if provided
-        effective_user_id = None
-        if user_id and user_id > 0:
-            with conn.cursor() as cur:
-                cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
-                user_exists = cur.fetchone()
-                if user_exists:
-                    effective_user_id = user_id
-                else:
-                    print(f"Warning: User ID {user_id} not found in database, images will be uploaded without user association")
-        
-        with conn.cursor() as cur:
-            # Process person image if provided
-            if person_image:
-                # Save uploaded file temporarily
-                person_path = save_uploaded_file(person_image)
-                temp_files.append(person_path)
-                
-                # Upload to cloudinary
-                person_url = upload_image(person_path, preserve_filename=True)
-                
-                # Extract public_id from URL
-                person_public_id = person_url.split("/")[-1].split(".")[0]
-                
-                # Store person image in database (new schema)
-                cur.execute("""
-                    INSERT INTO users_image (user_id, public_id, url, upload_date)
-                    VALUES (?, ?, ?, ?);
-                    SELECT SCOPE_IDENTITY();
-                """, (effective_user_id, person_public_id, person_url, datetime.now()))
-                cur.nextset()
-                person_id = cur.fetchone()[0]
-                
-                # Add to result
-                result["person_id"] = person_id
-                result["person_url"] = person_url
-                result["person_public_id"] = person_public_id
-            
-            # Process clothing image if provided
-            if clothing_image:
-                # Save uploaded file temporarily
-                clothing_path = save_uploaded_file(clothing_image)
-                temp_files.append(clothing_path)
-                
-                # Upload to cloudinary
-                clothing_url = upload_image(clothing_path, preserve_filename=True)
-                
-                # Extract public_id from URL
-                clothing_public_id = clothing_url.split("/")[-1].split(".")[0]
-                
-                # Store clothing image in database (new schema)
-                cur.execute("""
-                    INSERT INTO clothes (user_id, public_id, url, upload_date)
-                    VALUES (?, ?, ?, ?);
-                    SELECT SCOPE_IDENTITY();
-                """, (effective_user_id, clothing_public_id, clothing_url, datetime.now()))
-                cur.nextset()
-                clothing_id = cur.fetchone()[0]
-                
-                # Add to result
-                result["clothing_id"] = clothing_id
-                result["clothing_url"] = clothing_url
-                result["clothing_public_id"] = clothing_public_id
-            
-            # Commit the transaction
-            conn.commit()
-        
-        # Schedule cleanup of temporary files
-        background_tasks.add_task(cleanup_temp_files, temp_files)
-        
-        return result
-    except Exception as e:
-        # Rollback the transaction in case of error
-        if conn:
-            conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Error uploading images: {str(e)}")
-    finally:
-        # Always close the connection
-        if conn:
-            conn.close()
+    if not person_image or not clothing_image:
+        raise HTTPException(status_code=400, detail="Both person_image and clothing_image are required")
 
-@app.post("/api/try-on/process")
-async def process_try_on(
-    background_tasks: BackgroundTasks,
-    person_id: int = Form(...),
-    clothing_id: int = Form(...),
-    user_id: Optional[int] = Form(None)
-):
-    """
-    Process a virtual try-on with previously uploaded images
-    
-    - **person_id**: ID of the person image in the database
-    - **clothing_id**: ID of the clothing image in the database
-    - **user_id**: Optional user ID for saving the result to their history
-    """
     conn = None
     temp_files = []
-    
+
     try:
-        # Get database connection
         conn = get_connection()
         if not conn:
             raise HTTPException(status_code=500, detail="Database connection failed")
-        
-        # Validate user_id if provided
+
         effective_user_id = None
         if user_id and user_id > 0:
             with conn.cursor() as cur:
                 cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
-                user_exists = cur.fetchone()
-                if user_exists:
+                if cur.fetchone():
                     effective_user_id = user_id
-                else:
-                    print(f"Warning: User ID {user_id} not found in database, result will be saved without user association")
-        
+
         with conn.cursor() as cur:
-            # Get person image data (from users_image table)
-            cur.execute("SELECT * FROM users_image WHERE id = ?", (person_id,))
-            person_result = cur.fetchone()
-            
-            if not person_result:
-                raise HTTPException(status_code=404, detail="Person image not found")
-            
-            # Get clothing image data (from clothes table)
-            cur.execute("SELECT * FROM clothes WHERE id = ?", (clothing_id,))
-            clothing_result = cur.fetchone()
-            
-            if not clothing_result:
-                raise HTTPException(status_code=404, detail="Clothing image not found")
-            
-            # Extract URLs from the results
-            # We need to access by index based on the column order in the SELECT * query
-            person_url = person_result[3]  # Assuming 'url' is the 4th column (0-indexed)
-            clothing_url = clothing_result[3]  # Assuming 'url' is the 4th column (0-indexed)
-            
-            # If user_id not provided, try to get from person image
-            if not effective_user_id and person_result[1]:  # person_result[1] should be user_id
-                effective_user_id = person_result[1]
-            
-            # Download images from Cloudinary using the service functions
-            person_path = os.path.join(TEMP_DIR, f"person_{uuid.uuid4().hex}.jpg")
-            clothing_path = os.path.join(TEMP_DIR, f"clothing_{uuid.uuid4().hex}.jpg")
-            
-            # Use the save_image function from cloudinary_service
-            save_image(person_url, person_path)
-            save_image(clothing_url, clothing_path)
-            
-            temp_files.extend([person_path, clothing_path])
-            
-            # Process the try-on
-            result_path = infer_single_image(person_path, clothing_path)
+            # Save and upload person image
+            person_path = save_uploaded_file(person_image)
+            temp_files.append(person_path)
+            person_url = await run_in_threadpool(upload_image, person_path, True)
+            person_public_id = person_url.split("/")[-1].split(".")[0]
+
+            # Store person image in database (new schema)
+            cur.execute("""
+                INSERT INTO users_image (user_id, public_id, url, upload_date)
+                VALUES (?, ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """, (effective_user_id, person_public_id, person_url, datetime.now()))
+            cur.nextset()
+            person_id = cur.fetchone()[0]
+
+            # Save and upload clothing image
+            clothing_path = save_uploaded_file(clothing_image)
+            temp_files.append(clothing_path)
+            clothing_url = await run_in_threadpool(upload_image, clothing_path, True)
+            clothing_public_id = clothing_url.split("/")[-1].split(".")[0]
+
+            # Store clothing image in database (new schema)
+            cur.execute("""
+                INSERT INTO clothes (user_id, public_id, url, upload_date)
+                VALUES (?, ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """, (effective_user_id, clothing_public_id, clothing_url, datetime.now()))
+            cur.nextset()
+            clothing_id = cur.fetchone()[0]
+
+            # Download images locally
+            person_local_path = os.path.join(TEMP_DIR, f"person_{uuid.uuid4().hex}.jpg")
+            clothing_local_path = os.path.join(TEMP_DIR, f"clothing_{uuid.uuid4().hex}.jpg")
+
+            await run_in_threadpool(save_image, person_url, person_local_path)
+            await run_in_threadpool(save_image, clothing_url, clothing_local_path)
+
+            temp_files.extend([person_local_path, clothing_local_path])
+
+            # Run try-on process
+            result_path = await run_in_threadpool(infer_single_image, person_local_path, clothing_local_path)
             temp_files.append(result_path)
-            
-            # Upload result to cloudinary
-            result_url = upload_image(result_path, preserve_filename=True)
+
+            # Upload result image
+            result_url = await run_in_threadpool(upload_image, result_path, True)
             result_public_id = result_url.split("/")[-1].split(".")[0]
-            
+
             # Store result image in database (new schema)
             cur.execute("""
                 INSERT INTO tryOnImage (user_id, user_image_id, clothes_id, public_id, url, created_at)
@@ -282,32 +193,278 @@ async def process_try_on(
             """, (effective_user_id, person_id, clothing_id, result_public_id, result_url, datetime.now()))
             cur.nextset()
             result_id = cur.fetchone()[0]
-            
-            # Commit the transaction
+
             conn.commit()
-        
-        # Schedule cleanup of temporary files
+
         background_tasks.add_task(cleanup_temp_files, temp_files)
-        
+
         return {
             "success": True,
-            "result_id": result_id,
-            "result_url": result_url,
-            "person_url": person_url,
-            "clothing_url": clothing_url,
             "person_id": person_id,
+            "person_url": person_url,
             "clothing_id": clothing_id,
-            "user_id": effective_user_id
+            "clothing_url": clothing_url,
+            "result_id": result_id,
+            "result_url": result_url
         }
+
     except Exception as e:
-        # Rollback the transaction in case of error
         if conn:
             conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Error processing try-on: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing: {str(e)}")
+
     finally:
-        # Always close the connection
         if conn:
             conn.close()
+
+
+# @app.post("/api/upload/images")
+# async def upload_images(
+#     background_tasks: BackgroundTasks,
+#     person_image: Optional[UploadFile] = File(None),
+#     clothing_image: Optional[UploadFile] = File(None),
+#     user_id: Optional[int] = Form(None)
+# ):
+#     """
+#     Upload person and/or clothing images for virtual try-on
+    
+#     - **person_image**: Optional image of the person
+#     - **clothing_image**: Optional image of the clothing item
+#     - **user_id**: Optional user ID to associate with the images
+    
+#     At least one image must be provided.
+#     """
+#     if not person_image and not clothing_image:
+#         raise HTTPException(status_code=400, detail="At least one image must be provided")
+    
+#     conn = None
+#     temp_files = []
+#     result = {"success": True}
+    
+#     try:
+#         # Get database connection
+#         conn = get_connection()
+#         if not conn:
+#             raise HTTPException(status_code=500, detail="Database connection failed")
+        
+#         # Validate user_id if provided
+#         effective_user_id = None
+#         if user_id and user_id > 0:
+#             with conn.cursor() as cur:
+#                 cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+#                 user_exists = cur.fetchone()
+#                 if user_exists:
+#                     effective_user_id = user_id
+#                 else:
+#                     print(f"Warning: User ID {user_id} not found in database, images will be uploaded without user association")
+        
+#         with conn.cursor() as cur:
+#             # Process person image if provided
+#             if person_image:
+#                 # Save uploaded file temporarily
+#                 person_path = save_uploaded_file(person_image)
+#                 temp_files.append(person_path)
+                
+#                 # Upload to cloudinary
+#                 person_url = await run_in_threadpool(upload_image, person_path, True)
+                
+#                 # Extract public_id from URL
+#                 person_public_id = person_url.split("/")[-1].split(".")[0]
+                
+#                 # Store person image in database (new schema)
+#                 # cur.execute("""
+#                 #     INSERT INTO users_image (user_id, public_id, url, upload_date)
+#                 #     VALUES (?, ?, ?, ?);
+#                 #     SELECT SCOPE_IDENTITY();
+#                 # """, (effective_user_id, person_public_id, person_url, datetime.now()))
+#                 # cur.nextset()
+#                 # person_id = cur.fetchone()[0]
+                
+#                 # Add to result
+#                 result["person_id"] = 52
+#                 result["person_url"] = person_url
+#                 result["person_public_id"] = person_public_id
+            
+#             # Process clothing image if provided
+#             if clothing_image:
+#                 # Save uploaded file temporarily
+#                 clothing_path = save_uploaded_file(clothing_image)
+#                 temp_files.append(clothing_path)
+                
+#                 # Upload to cloudinary
+#                 clothing_url = "https://res.cloudinary.com/dno97zymk/image/upload/v1751111030/HackAIThon/20250628184347_4d2912b81a664f8f8cff4081d984231d.jpg"
+                
+#                 # Extract public_id from URL
+#                 clothing_public_id = clothing_url.split("/")[-1].split(".")[0]
+                
+#                 # Store clothing image in database (new schema)
+#                 # cur.execute("""
+#                 #     INSERT INTO clothes (user_id, public_id, url, upload_date)
+#                 #     VALUES (?, ?, ?, ?);
+#                 #     SELECT SCOPE_IDENTITY();
+#                 # """, (effective_user_id, clothing_public_id, clothing_url, datetime.now()))
+#                 # cur.nextset()
+#                 # clothing_id = cur.fetchone()[0]
+                
+#                 # Add to result
+#                 result["clothing_id"] = 52
+#                 result["clothing_url"] = clothing_url
+#                 result["clothing_public_id"] = clothing_public_id
+            
+#             # Commit the transaction
+#             conn.commit()
+        
+#         # Schedule cleanup of temporary files
+#         background_tasks.add_task(cleanup_temp_files, temp_files)
+        
+#         return {
+#         "success": True,
+#         "person_id": 52,
+#         "person_url": "https://res.cloudinary.com/dno97zymk/image/upload/v1751111028/HackAIThon/20250628184342_aab0222dca4d4102a16d10f87db36ae4.png",
+#         "person_public_id": "20250628184342_aab0222dca4d4102a16d10f87db36ae4",
+#         "clothing_id": 52,
+#         "clothing_url": "https://res.cloudinary.com/dno97zymk/image/upload/v1751111030/HackAIThon/20250628184347_4d2912b81a664f8f8cff4081d984231d.jpg",
+#         "clothing_public_id": "20250628184347_4d2912b81a664f8f8cff4081d984231d"
+#     }
+#     except Exception as e:
+#         # Rollback the transaction in case of error
+#         if conn:
+#             conn.rollback()
+#         raise HTTPException(status_code=500, detail=f"Error uploading images: {str(e)}")
+#     finally:
+#         # Always close the connection
+#         if conn:
+#             conn.close()
+
+# # @app.post("/api/upload/images")
+# # async def upload_images(
+# #     background_tasks: BackgroundTasks,
+# #     person_image: Optional[UploadFile] = File(None),
+# #     clothing_image: Optional[UploadFile] = File(None),
+# #     user_id: Optional[int] = Form(None)
+# # ):
+# #     # ... your existing logic ...
+# #     # after processing and storing images, construct exactly this response:
+# #     return {
+# #         "success": True,
+# #         "person_id": 52,
+# #         "person_url": "https://res.cloudinary.com/dno97zymk/image/upload/v1751111028/HackAIThon/20250628184342_aab0222dca4d4102a16d10f87db36ae4.png",
+# #         "person_public_id": "20250628184342_aab0222dca4d4102a16d10f87db36ae4",
+# #         "clothing_id": 52,
+# #         "clothing_url": "https://res.cloudinary.com/dno97zymk/image/upload/v1751111030/HackAIThon/20250628184347_4d2912b81a664f8f8cff4081d984231d.jpg",
+# #         "clothing_public_id": "20250628184347_4d2912b81a664f8f8cff4081d984231d"
+# #     }
+
+# @app.post("/api/try-on/process")
+# async def process_try_on(
+#     background_tasks: BackgroundTasks,
+#     person_id: int = Form(...),
+#     clothing_id: int = Form(...),
+#     user_id: Optional[int] = Form(None)
+# ):
+#     """
+#     Process a virtual try-on with previously uploaded images
+    
+#     - **person_id**: ID of the person image in the database
+#     - **clothing_id**: ID of the clothing image in the database
+#     - **user_id**: Optional user ID for saving the result to their history
+#     """
+#     conn = None
+#     temp_files = []
+    
+#     try:
+#         # Get database connection
+#         conn = get_connection()
+#         if not conn:
+#             raise HTTPException(status_code=500, detail="Database connection failed")
+        
+#         # Validate user_id if provided
+#         effective_user_id = None
+#         if user_id and user_id > 0:
+#             with conn.cursor() as cur:
+#                 cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+#                 user_exists = cur.fetchone()
+#                 if user_exists:
+#                     effective_user_id = user_id
+#                 else:
+#                     print(f"Warning: User ID {user_id} not found in database, result will be saved without user association")
+        
+#         with conn.cursor() as cur:
+#             # Get person image data (from users_image table)
+#             cur.execute("SELECT * FROM users_image WHERE id = ?", (person_id,))
+#             person_result = cur.fetchone()
+            
+#             if not person_result:
+#                 raise HTTPException(status_code=404, detail="Person image not found")
+            
+#             # Get clothing image data (from clothes table)
+#             cur.execute("SELECT * FROM clothes WHERE id = ?", (clothing_id,))
+#             clothing_result = cur.fetchone()
+            
+#             if not clothing_result:
+#                 raise HTTPException(status_code=404, detail="Clothing image not found")
+            
+#             # Extract URLs from the results
+#             # We need to access by index based on the column order in the SELECT * query
+#             person_url = person_result[3]  # Assuming 'url' is the 4th column (0-indexed)
+#             clothing_url = clothing_result[3]  # Assuming 'url' is the 4th column (0-indexed)
+            
+#             # If user_id not provided, try to get from person image
+#             if not effective_user_id and person_result[1]:  # person_result[1] should be user_id
+#                 effective_user_id = person_result[1]
+            
+#             # Download images from Cloudinary using the service functions
+#             person_path = os.path.join(TEMP_DIR, f"person_{uuid.uuid4().hex}.jpg")
+#             clothing_path = os.path.join(TEMP_DIR, f"clothing_{uuid.uuid4().hex}.jpg")
+            
+#             # Use the save_image function from cloudinary_service
+#             save_image(person_url, person_path)
+#             save_image(clothing_url, clothing_path)
+            
+#             temp_files.extend([person_path, clothing_path])
+            
+#             # Process the try-on
+#             result_path = infer_single_image(person_path, clothing_path)
+#             temp_files.append(result_path)
+            
+#             # Upload result to cloudinary
+#             result_url = await run_in_threadpool(upload_image, result_path, True)
+#             result_public_id = result_url.split("/")[-1].split(".")[0]
+            
+#             # Store result image in database (new schema)
+#             cur.execute("""
+#                 INSERT INTO tryOnImage (user_id, user_image_id, clothes_id, public_id, url, created_at)
+#                 VALUES (?, ?, ?, ?, ?, ?);
+#                 SELECT SCOPE_IDENTITY();
+#             """, (effective_user_id, person_id, clothing_id, result_public_id, result_url, datetime.now()))
+#             cur.nextset()
+#             result_id = cur.fetchone()[0]
+            
+#             # Commit the transaction
+#             conn.commit()
+        
+#         # Schedule cleanup of temporary files
+#         background_tasks.add_task(cleanup_temp_files, temp_files)
+        
+#         return {
+#             "success": True,
+#             "result_id": result_id,
+#             "result_url": result_url,
+#             "person_url": person_url,
+#             "clothing_url": clothing_url,
+#             "person_id": person_id,
+#             "clothing_id": clothing_id,
+#             "user_id": effective_user_id
+#         }
+#     except Exception as e:
+#         # Rollback the transaction in case of error
+#         if conn:
+#             conn.rollback()
+#         raise HTTPException(status_code=500, detail=f"Error processing try-on: {str(e)}")
+#     finally:
+#         # Always close the connection
+#         if conn:
+#             conn.close()
 
 @app.get("/api/history/{user_id}")
 async def get_history(user_id: int):
