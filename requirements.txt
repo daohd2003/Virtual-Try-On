@@ -13,7 +13,6 @@ diffusers
 opencv-python 
 matplotlib
 scipy
-psycopg2
 fastapi
 uvicorn
 uuid
@@ -22,4 +21,4 @@ uvicorn
 cloudinary
 pillow
 google-generativeai
-pyodbc
+pymssql

@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional
 import time
 import json
-import pyodbc
+import pymssql
 
 # Import our services
 from TryOnModel.tryOn import infer_single_image
@@ -133,42 +133,45 @@ async def upload_and_process(
         effective_user_id = None
         if user_id and user_id > 0:
             with conn.cursor() as cur:
-                cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+                cur.execute("SELECT id FROM users WHERE id = %s", (user_id,))
                 if cur.fetchone():
                     effective_user_id = user_id
 
         with conn.cursor() as cur:
-            # Save and upload person image
             person_path = save_uploaded_file(person_image)
             temp_files.append(person_path)
             person_url = await run_in_threadpool(upload_image, person_path, True)
+            print("[DEBUG] person_urll:", person_url)
             person_public_id = person_url.split("/")[-1].split(".")[0]
 
-            # Store person image in database (new schema)
             cur.execute("""
                 INSERT INTO users_image (user_id, public_id, url, upload_date)
-                VALUES (?, ?, ?, ?);
-                SELECT SCOPE_IDENTITY();
+                VALUES (%s, %s, %s, %s)
             """, (effective_user_id, person_public_id, person_url, datetime.now()))
-            cur.nextset()
-            person_id = cur.fetchone()[0]
+            cur.execute("SELECT SCOPE_IDENTITY()")
+            row = cur.fetchone()
+            print("[DEBUG] Inserted person id row:", row)
+            if not row or row[0] is None:
+                raise Exception("Could not fetch inserted person id")
+            person_id = row[0]
 
-            # Save and upload clothing image
             clothing_path = save_uploaded_file(clothing_image)
             temp_files.append(clothing_path)
             clothing_url = await run_in_threadpool(upload_image, clothing_path, True)
+            print("[DEBUG] clothing_url:", clothing_url)
             clothing_public_id = clothing_url.split("/")[-1].split(".")[0]
 
-            # Store clothing image in database (new schema)
             cur.execute("""
                 INSERT INTO clothes (user_id, public_id, url, upload_date)
-                VALUES (?, ?, ?, ?);
-                SELECT SCOPE_IDENTITY();
+                VALUES (%s, %s, %s, %s)
             """, (effective_user_id, clothing_public_id, clothing_url, datetime.now()))
-            cur.nextset()
-            clothing_id = cur.fetchone()[0]
+            cur.execute("SELECT SCOPE_IDENTITY()")
+            row = cur.fetchone()
+            print("[DEBUG] Inserted clothing id row:", row)
+            if not row or row[0] is None:
+                raise Exception("Could not fetch inserted clothing id")
+            clothing_id = row[0]
 
-            # Download images locally
             person_local_path = os.path.join(TEMP_DIR, f"person_{uuid.uuid4().hex}.jpg")
             clothing_local_path = os.path.join(TEMP_DIR, f"clothing_{uuid.uuid4().hex}.jpg")
 
@@ -177,22 +180,23 @@ async def upload_and_process(
 
             temp_files.extend([person_local_path, clothing_local_path])
 
-            # Run try-on process
             result_path = await run_in_threadpool(infer_single_image, person_local_path, clothing_local_path)
             temp_files.append(result_path)
 
-            # Upload result image
             result_url = await run_in_threadpool(upload_image, result_path, True)
+            print("[DEBUG] result_url:", result_url)
             result_public_id = result_url.split("/")[-1].split(".")[0]
 
-            # Store result image in database (new schema)
             cur.execute("""
                 INSERT INTO tryOnImage (user_id, user_image_id, clothes_id, public_id, url, created_at)
-                VALUES (?, ?, ?, ?, ?, ?);
-                SELECT SCOPE_IDENTITY();
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (effective_user_id, person_id, clothing_id, result_public_id, result_url, datetime.now()))
-            cur.nextset()
-            result_id = cur.fetchone()[0]
+            cur.execute("SELECT SCOPE_IDENTITY()")
+            row = cur.fetchone()
+            print("[DEBUG] Inserted result id row:", row)
+            if not row or row[0] is None:
+                raise Exception("Could not fetch inserted result id")
+            result_id = row[0]
 
             conn.commit()
 
@@ -216,7 +220,6 @@ async def upload_and_process(
     finally:
         if conn:
             conn.close()
-
 
 # @app.post("/api/upload/images")
 # async def upload_images(

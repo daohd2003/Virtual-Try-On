@@ -1,8 +1,6 @@
-import psycopg2
-import pyodbc
+import pymssql
 import os
 import dotenv
-from psycopg2.extras import RealDictCursor
 import json
 from datetime import datetime
 from decimal import Decimal
@@ -40,34 +38,28 @@ class CustomEncoder(json.JSONEncoder):
 
 def get_connection():
     """
-    Establish and return a connection to the SQL Server database.
+    Thiết lập và trả về một kết nối tới database SQL Server bằng pymssql.
 
     Returns:
-        connection: A pyodbc database connection object.
+        connection: Một đối tượng kết nối database của pymssql, hoặc None nếu kết nối thất bại.
     """
     try:
-        # Construct the connection string for SQL Server
-        # Using f-string for readability and directly getting values from environment variables
-        connection_string = (
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};"  # Make sure this driver is installed
-            f"SERVER={os.getenv('SQLSERVER_HOST')},{os.getenv('SQLSERVER_PORT')};"
-            f"DATABASE={os.getenv('SQLSERVER_DB')};"
-            f"UID={os.getenv('SQLSERVER_USER')};"
-            f"PWD={os.getenv('SQLSERVER_PASSWORD')}"
-            # For Windows Authentication (if applicable), you might use:
-            # f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={os.getenv('SQLSERVER_HOST')};DATABASE={os.getenv('SQLSERVER_DB')};Trusted_Connection=yes;"
+        # Bỏ hoàn toàn việc tạo connection_string.
+        # Thay vào đó, truyền thẳng các thông tin vào hàm pymssql.connect()
+        # dưới dạng các tham số được đặt tên (keyword arguments).
+        conn = pymssql.connect(
+            server=os.getenv('SQLSERVER_HOST'),
+            user=os.getenv('SQLSERVER_USER'),
+            password=os.getenv('SQLSERVER_PASSWORD'),
+            database=os.getenv('SQLSERVER_DB'),
+            port=os.getenv('SQLSERVER_PORT', 1433) # Thêm port và đặt giá trị mặc định
         )
-
-        conn = pyodbc.connect(connection_string)
-        print("Successfully connected to SQL Server.") # Added for feedback
+        
+        print(">>>>> Da ket noi thanh cong toi SQL Server bang pymssql. <<<<<")
         return conn
-    except pyodbc.Error as ex: # Catch specific pyodbc errors
-        sqlstate = ex.args[0]
-        print(f"Error connecting to the database: {ex}")
-        print(f"SQLSTATE: {sqlstate}")
-        return None
+
     except Exception as e:
-        print(f"An unexpected error occurred: {str(e)}")
+        print(f">>>>> Loi khi ket noi voi pymssql: {e} <<<<<")
         return None
 
 def execute_query(query, params=None, fetch=True):
@@ -443,14 +435,8 @@ def getConnectionString():
 
 def create_tables():
     """
-    Create the necessary database tables if they don't exist in SQL Server.
-
-    This function creates all required tables for the application with proper
-    indexes and constraints. It's designed to be idempotent and safe to run
-    in production environments.
-
-    Returns:
-        bool: True if successful, False otherwise
+    Tạo các bảng database cần thiết nếu chúng chưa tồn tại trong SQL Server.
+    Hàm này được thiết kế để an toàn khi chạy nhiều lần.
     """
     conn = get_connection()
     if not conn:
@@ -458,156 +444,139 @@ def create_tables():
         return False
 
     try:
+        # Sử dụng with để đảm bảo cursor được đóng đúng cách
         with conn.cursor() as cur:
-            # SQL Server does not have a direct 'CREATE TABLE IF NOT EXISTS' syntax
-            # that works for multiple statements in one execute call like PostgreSQL.
-            # Instead, we will use IF NOT EXISTS blocks for each table creation
-            # to ensure idempotency.
+            
+            # --- Tách mỗi khối IF NOT EXISTS thành một lệnh execute riêng biệt ---
 
-            # Check if tables already exist (SQL Server syntax)
-            cur.execute("""
-                SELECT table_name
-                FROM INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_SCHEMA = 'dbo' -- Hoặc schema của bạn
-                AND table_name IN ('users', 'users_image', 'clothes', 'tryOnImage', 'feedback', 'schema_version');
-            """)
-            existing_tables = [row[0] for row in cur.fetchall()]
-
-            if existing_tables:
-                print(f"Found existing tables: {', '.join(existing_tables)}")
-                print("Tables will be created only if they don't exist.")
-            # ---
             # Table: users
+            print("Checking/Creating table: users...")
             cur.execute("""
                 IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[users]') AND type in (N'U'))
                 BEGIN
                     CREATE TABLE users (
-                        id INT PRIMARY KEY IDENTITY(1,1), -- Thay thế SERIAL PRIMARY KEY
-                        username NVARCHAR(100) NOT NULL UNIQUE, -- NVARCHAR cho Unicode
-                        email NVARCHAR(255) NOT NULL UNIQUE, -- NVARCHAR cho Unicode
-                        password_hash NVARCHAR(255) NOT NULL, -- NVARCHAR cho Unicode
-                        created_at DATETIME DEFAULT GETDATE(), -- Thay thế TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        last_login DATETIME -- Thêm last_login từ phiên bản trước đó nếu cần
+                        id INT PRIMARY KEY IDENTITY(1,1),
+                        username NVARCHAR(100) NOT NULL UNIQUE,
+                        email NVARCHAR(255) NOT NULL UNIQUE,
+                        password_hash NVARCHAR(255) NOT NULL,
+                        created_at DATETIME DEFAULT GETDATE(),
+                        last_login DATETIME
                     );
                     CREATE INDEX idx_users_username ON users(username);
                     CREATE INDEX idx_users_email ON users(email);
-                    PRINT 'Table users created successfully.';
                 END;
             """)
-
-            # ---
-            # Table: users_image - Person/user images
+            
+            # Table: users_image
+            print("Checking/Creating table: users_image...")
             cur.execute("""
                 IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[users_image]') AND type in (N'U'))
                 BEGIN
                     CREATE TABLE users_image (
-                        id INT PRIMARY KEY IDENTITY(1,1), -- Thay thế SERIAL PRIMARY KEY
-                        user_id INT REFERENCES users(id) NULL, -- INTEGER REFERENCES users(id)
-                        public_id NVARCHAR(255) NOT NULL, -- VARCHAR(255) đổi thành NVARCHAR
-                        url NVARCHAR(MAX) NOT NULL, -- TEXT đổi thành NVARCHAR(MAX)
-                        upload_date DATETIME DEFAULT GETDATE() -- TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        id INT PRIMARY KEY IDENTITY(1,1),
+                        user_id INT REFERENCES users(id) ON DELETE CASCADE, -- Thêm ON DELETE CASCADE
+                        public_id NVARCHAR(255) NOT NULL,
+                        url NVARCHAR(MAX) NOT NULL,
+                        upload_date DATETIME DEFAULT GETDATE()
                     );
                     CREATE INDEX idx_users_image_user_id ON users_image(user_id);
                     CREATE INDEX idx_users_image_public_id ON users_image(public_id);
-                    PRINT 'Table users_image created successfully.';
                 END;
             """)
 
-            # ---
-            # Table: clothes - Clothing images
+            # Table: clothes
+            print("Checking/Creating table: clothes...")
             cur.execute("""
                 IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[clothes]') AND type in (N'U'))
                 BEGIN
                     CREATE TABLE clothes (
-                        id INT PRIMARY KEY IDENTITY(1,1), -- Thay thế SERIAL PRIMARY KEY
-                        user_id INT REFERENCES users(id) NULL,
-                        public_id NVARCHAR(255) NOT NULL, -- VARCHAR(255) đổi thành NVARCHAR
-                        url NVARCHAR(MAX) NOT NULL, -- TEXT đổi thành NVARCHAR(MAX)
-                        upload_date DATETIME DEFAULT GETDATE() -- TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        id INT PRIMARY KEY IDENTITY(1,1),
+                        user_id INT REFERENCES users(id) ON DELETE CASCADE, -- Thêm ON DELETE CASCADE
+                        public_id NVARCHAR(255) NOT NULL,
+                        url NVARCHAR(MAX) NOT NULL,
+                        upload_date DATETIME DEFAULT GETDATE()
                     );
-                    -- CREATE INDEX idx_clothes_user_id ON clothes(user_id); -- Nếu bạn thêm lại cột user_id
+                    CREATE INDEX idx_clothes_user_id ON clothes(user_id);
                     CREATE INDEX idx_clothes_public_id ON clothes(public_id);
-                    PRINT 'Table clothes created successfully.';
                 END;
             """)
 
-            # ---
-            # Table: tryOnImage - Try-on results linking person and clothing images
+            # Table: tryOnImage
+            print("Checking/Creating table: tryOnImage...")
             cur.execute("""
                 IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[tryOnImage]') AND type in (N'U'))
                 BEGIN
                     CREATE TABLE tryOnImage (
-                        id INT PRIMARY KEY IDENTITY(1,1), -- Thay thế SERIAL PRIMARY KEY
-                        user_id INT REFERENCES users(id) NULL, -- INTEGER REFERENCES users(id)
-                        user_image_id INT REFERENCES users_image(id), -- INTEGER REFERENCES users_image(id)
-                        clothes_id INT REFERENCES clothes(id), -- INTEGER REFERENCES clothes(id)
-                        public_id NVARCHAR(255) NOT NULL, -- VARCHAR(255) đổi thành NVARCHAR
-                        url NVARCHAR(MAX) NOT NULL, -- TEXT đổi thành NVARCHAR(MAX)
-                        created_at DATETIME DEFAULT GETDATE() -- TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        id INT PRIMARY KEY IDENTITY(1,1),
+                        user_id INT REFERENCES users(id), -- No cascade here, keep records
+                        user_image_id INT REFERENCES users_image(id),
+                        clothes_id INT REFERENCES clothes(id),
+                        public_id NVARCHAR(255) NOT NULL,
+                        url NVARCHAR(MAX) NOT NULL,
+                        created_at DATETIME DEFAULT GETDATE()
                     );
                     CREATE INDEX idx_tryOnImage_user_id ON tryOnImage(user_id);
-                    CREATE INDEX idx_tryOnImage_user_image_id ON tryOnImage(user_image_id);
-                    CREATE INDEX idx_tryOnImage_clothes_id ON tryOnImage(clothes_id);
-                    PRINT 'Table tryOnImage created successfully.';
                 END;
             """)
 
-            # ---
-            # Table: feedback - AI-generated fashion feedback for try-on results
+            # Table: feedback
+            print("Checking/Creating table: feedback...")
             cur.execute("""
                 IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[feedback]') AND type in (N'U'))
                 BEGIN
                     CREATE TABLE feedback (
-                        id INT PRIMARY KEY IDENTITY(1,1), -- Thay thế SERIAL PRIMARY KEY
-                        tryOnImage_id INT REFERENCES tryOnImage(id), -- INTEGER REFERENCES tryOnImage(id)
-                        feedback NVARCHAR(MAX) NOT NULL, -- JSONB đổi thành NVARCHAR(MAX)
-                        created_at DATETIME DEFAULT GETDATE() -- TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        id INT PRIMARY KEY IDENTITY(1,1),
+                        tryOnImage_id INT REFERENCES tryOnImage(id) ON DELETE CASCADE,
+                        feedback NVARCHAR(MAX) NOT NULL,
+                        created_at DATETIME DEFAULT GETDATE()
                     );
                     CREATE INDEX idx_feedback_tryOnImage_id ON feedback(tryOnImage_id);
-                    PRINT 'Table feedback created successfully.';
                 END;
             """)
-
-            # ---
-            # Table: schema_version - Tracks database schema versions
+            
+            # Table: schema_version
+            print("Checking/Creating table: schema_version...")
             cur.execute("""
                 IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[schema_version]') AND type in (N'U'))
                 BEGIN
                     CREATE TABLE schema_version (
-                        id INT PRIMARY KEY IDENTITY(1,1), -- Thay thế SERIAL PRIMARY KEY
-                        version_number NVARCHAR(50) NOT NULL UNIQUE, -- version đổi thành version_number
-                        applied_date DATETIME DEFAULT GETDATE(), -- applied_at đổi thành applied_date
-                        description NVARCHAR(MAX) -- Thêm cột description
+                        id INT PRIMARY KEY IDENTITY(1,1),
+                        version_number NVARCHAR(50) NOT NULL UNIQUE,
+                        applied_date DATETIME DEFAULT GETDATE(),
+                        description NVARCHAR(MAX)
                     );
-                    PRINT 'Table schema_version created successfully.';
                 END;
             """)
 
-            # Check if we need to insert the current version
-            # Note: For SQL Server, @@ROWCOUNT after an INSERT/UPDATE can be used,
-            # or a SELECT EXISTS. Using SELECT COUNT(*) is also fine.
-            cur.execute("SELECT COUNT(*) FROM schema_version WHERE version_number = '2.0.0'")
+            # --- Sửa lại logic INSERT và cách kiểm tra ---
+            print("Checking/Recording schema version...")
+            # Sửa lại cú pháp tham số từ ? sang %s
+            version_to_check = '2.0.0'
+            description_text = 'Initial schema creation'
+            
+            cur.execute("SELECT COUNT(*) as count FROM schema_version WHERE version_number = %s", (version_to_check,))
+            
+            # Sửa lại cách lấy dữ liệu từ row[0] sang row['count'] vì as_dict=True
             if cur.fetchone()[0] == 0:
-                cur.execute("INSERT INTO schema_version (version_number, description) VALUES (?, ?)", '2.0.0', 'Initial schema creation')
-                print("Schema version '2.0.0' recorded.")
+                cur.execute("INSERT INTO schema_version (version_number, description) VALUES (%s, %s)", (version_to_check, description_text))
+                print(f"Schema version '{version_to_check}' recorded.")
             else:
-                print("Schema version '2.0.0' already exists.")
+                print(f"Schema version '{version_to_check}' already exists.")
 
+            # Commit tất cả các thay đổi sau khi tất cả các lệnh đã thực thi thành công
             conn.commit()
-            print("All database tables checked/created successfully.")
+            print("\nAll database tables checked/created successfully.")
             return True
-    except pyodbc.Error as ex:
-        sqlstate = ex.args[0]
-        print(f"Error creating tables: {ex}")
-        print(f"SQLSTATE: {sqlstate}")
-        conn.rollback()
-        return False
+
     except Exception as e:
-        print(f"An unexpected error occurred during table creation: {str(e)}")
+        print(f"\nAn unexpected error occurred during table creation: {str(e)}")
+        # Rollback lại các thay đổi nếu có lỗi xảy ra
         conn.rollback()
         return False
     finally:
-        conn.close()
+        # Luôn luôn đóng kết nối
+        if conn:
+            conn.close()
 
 def drop_tables():
     """
