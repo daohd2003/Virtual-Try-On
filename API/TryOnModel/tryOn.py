@@ -67,10 +67,10 @@ seed = 42
 width = 768
 height = 1024
 cloth_type = 'upper'
-num_inference_steps = 30
-guidance_scale = 2.5
+num_inference_steps = 50
+guidance_scale = 3.5
 
-def infer_single_image(person_image, cloth_image):
+def infer_single_image(person_image, cloth_image, cloth_type='upper'):
     # Use absolute paths for output
     current_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(current_dir, "Image", "output")
@@ -89,6 +89,7 @@ def infer_single_image(person_image, cloth_image):
     person_image = resize_and_crop(person_image, (width, height))
     cloth_image = resize_and_padding(cloth_image, (width, height))
     print("Images loaded and resized successfully")
+    print(f"[DEBUG] infer_single_image() called with cloth_type = {cloth_type}")
 
     print("Generating mask...")
     mask = automasker(person_image, cloth_type)['mask']

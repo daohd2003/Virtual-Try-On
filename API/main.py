@@ -117,7 +117,8 @@ async def upload_and_process(
     background_tasks: BackgroundTasks,
     person_image: Optional[UploadFile] = File(None),
     clothing_image: Optional[UploadFile] = File(None),
-    user_id: Optional[int] = Form(None)
+    user_id: Optional[int] = Form(None),
+    cloth_type: str = Form("upper")
 ):
     if not person_image or not clothing_image:
         raise HTTPException(status_code=400, detail="Both person_image and clothing_image are required")
@@ -180,7 +181,8 @@ async def upload_and_process(
 
             temp_files.extend([person_local_path, clothing_local_path])
 
-            result_path = await run_in_threadpool(infer_single_image, person_local_path, clothing_local_path)
+            print(f"[DEBUG] cloth_type received from client: {cloth_type}")
+            result_path = await run_in_threadpool(infer_single_image, person_local_path, clothing_local_path, cloth_type)
             temp_files.append(result_path)
 
             result_url = await run_in_threadpool(upload_image, result_path, True)
