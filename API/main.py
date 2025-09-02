@@ -721,55 +721,127 @@ async def retrieve_or_generate_feedback(
     # For GET requests, we'll forward to generate feedback
     return await generate_new_feedback(result_id, background_tasks)
 
+# @app.post("/api/feedback/{result_id}")
+# async def generate_new_feedback(
+#     result_id: int,
+#     background_tasks: BackgroundTasks
+# ):
+#     """
+#     Generate new fashion feedback for a try-on result, even if feedback already exists
+    
+#     - **result_id**: ID of the try-on result
+    
+#     Returns newly generated feedback
+#     """
+
+#     print(f"DEBUG: Bắt đầu tạo/lấy feedback mới cho result_id: {result_id}")
+#     # Get the result image URL from tryOnImage table
+#     query = "SELECT url, id FROM tryOnImage WHERE id = %(result_id)s"
+#     result = execute_query(query, {"result_id": result_id})
+    
+#     if not result or not result[0]["url"]:
+#         raise HTTPException(status_code=404, detail="Try-on result not found")
+    
+#     result_url = result[0]["url"]
+
+#     print("[DEBUG] result_url:", result_url)
+
+#     temp_files = []
+    
+#     try:
+#         # Download the image
+#         result_path = os.path.join(TEMP_DIR, f"result_{uuid.uuid4().hex}.jpg")
+#         save_image(result_url, result_path)
+#         temp_files.append(result_path)
+        
+#         # Generate fashion feedback
+#         feedback = get_fashion_feedback(result_path)
+        
+#         # Store feedback in database
+#         feedback_id = None
+#         try:
+#             feedback_data = {
+#                 "tryOnImage_id": result_id,
+#                 "feedback": feedback if isinstance(feedback, str) else json.dumps(feedback)
+#             }
+#             feedback_id = insert_data("feedback", feedback_data)
+#         except Exception as e:
+#             print(f"Error storing feedback: {str(e)}")
+        
+#         # Format the feedback for UI display
+#         formatted_text = format_feedback_for_ui(feedback)
+        
+#         # Schedule cleanup of temporary files
+#         background_tasks.add_task(cleanup_temp_files, temp_files)
+        
+#         # Return the feedback
+#         return {
+#             "status": "success",
+#             "message": "Feedback generated successfully",
+#             "data": {
+#                 "feedback": feedback,
+#                 "formatted_text": formatted_text
+#             }
+#         }
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Error generating fashion feedback: {str(e)}")
+#     finally:
+#         # Clean up temp files immediately if there was an error
+#         for path in temp_files:
+#             if os.path.exists(path):
+#                 try:
+#                     os.remove(path)
+#                 except:
+#                     pass
+
 @app.post("/api/feedback/{result_id}")
-async def generate_new_feedback(
-    result_id: int,
-    background_tasks: BackgroundTasks
-):
+async def generate_new_feedback(result_id: int, background_tasks: BackgroundTasks):
     """
     Generate new fashion feedback for a try-on result, even if feedback already exists
-    
-    - **result_id**: ID of the try-on result
-    
-    Returns newly generated feedback
     """
-    # Get the result image URL from tryOnImage table
-    query = "SELECT url, id FROM tryOnImage WHERE id = %(result_id)s"
-    result = execute_query(query, {"result_id": result_id})
-    
-    if not result or not result[0]["url"]:
-        raise HTTPException(status_code=404, detail="Try-on result not found")
-    
-    result_url = result[0]["url"]
+    print(f"[DEBUG] Bắt đầu tạo feedback cho result_id: {result_id}")
+    conn = None
     temp_files = []
-    
+
     try:
-        # Download the image
+        # 1. Kết nối database
+        conn = get_connection()
+        if not conn:
+            raise HTTPException(status_code=500, detail="Database connection failed")
+
+        # 2. Truy vấn URL ảnh
+        with conn.cursor() as cur:
+            cur.execute("SELECT url FROM tryOnImage WHERE id = %s", (result_id,))
+            row = cur.fetchone()
+            if not row or not row[0]:
+                raise HTTPException(status_code=404, detail="Try-on result not found")
+
+            result_url = row[0]
+            print("[DEBUG] URL ảnh lấy được:", result_url)
+
+        # 3. Tải ảnh về
         result_path = os.path.join(TEMP_DIR, f"result_{uuid.uuid4().hex}.jpg")
         save_image(result_url, result_path)
         temp_files.append(result_path)
-        
-        # Generate fashion feedback
+
+        # 4. Sinh feedback từ ảnh
         feedback = get_fashion_feedback(result_path)
-        
-        # Store feedback in database
-        feedback_id = None
-        try:
-            feedback_data = {
-                "tryOnImage_id": result_id,
-                "feedback": feedback if isinstance(feedback, str) else json.dumps(feedback)
-            }
-            feedback_id = insert_data("feedback", feedback_data)
-        except Exception as e:
-            print(f"Error storing feedback: {str(e)}")
-        
-        # Format the feedback for UI display
+
+        # 5. Ghi feedback vào DB
+        with conn.cursor() as cur:
+            feedback_text = feedback if isinstance(feedback, str) else json.dumps(feedback)
+            cur.execute("""
+                INSERT INTO feedback (tryOnImage_id, feedback)
+                VALUES (%s, %s)
+            """, (result_id, feedback_text))
+            conn.commit()
+
+        # 6. Chuẩn bị hiển thị
         formatted_text = format_feedback_for_ui(feedback)
-        
-        # Schedule cleanup of temporary files
+
+        # 7. Cleanup file tạm sau response
         background_tasks.add_task(cleanup_temp_files, temp_files)
-        
-        # Return the feedback
+
         return {
             "status": "success",
             "message": "Feedback generated successfully",
@@ -778,16 +850,25 @@ async def generate_new_feedback(
                 "formatted_text": formatted_text
             }
         }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating fashion feedback: {str(e)}")
+        print(f"[ERROR] {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Lỗi tạo feedback: {str(e)}")
+
     finally:
-        # Clean up temp files immediately if there was an error
+        # Dọn file ngay nếu có lỗi
         for path in temp_files:
             if os.path.exists(path):
                 try:
                     os.remove(path)
                 except:
                     pass
+        # Đóng kết nối DB nếu đã mở
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
 
 def format_feedback_for_ui(feedback):
     """
