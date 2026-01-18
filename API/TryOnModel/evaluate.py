@@ -3,7 +3,7 @@ import PIL.Image
 import json
 
 # Configure your API key
-genai.configure(api_key="AIzaSyBLFpdCcrg4M67m5kNfT7QxBnFGQT3UAFE")
+genai.configure(api_key="AIzaSyBLxxxxxxxxxxxxxxxx")
 
 def get_fashion_feedback(image_path):
     """Generates fashion feedback from Gemini using a virtual try-on image.
