@@ -16,7 +16,7 @@ A FastAPI application that allows users to virtually try on clothing items using
 ## Technology Stack
 
 - **Backend Framework**: FastAPI
-- **Database**: PostgreSQL
+- **Database**: SQL Server
 - **Image Storage**: Cloudinary
 - **Try-On Model**: CatVTON (Stable Diffusion-based model)
 - **Fashion Feedback**: Google Gemini 2.0 Flash
